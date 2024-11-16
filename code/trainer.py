@@ -269,16 +269,20 @@ class Trainer:
                 images = images.to(self.device)
                 labels = labels.to(self.device)
                 idxs = idxs.to(self.device)
-                pred, loss = self.model.forward(images, labels)
+                pred_logits, loss = self.model.forward(images, labels)
+
+                # Convert logits to predicted labels
+                pred_probs = torch.sigmoid(pred_logits)
+                pred_labels = (pred_probs >= 0.5).long()
 
                 loss = loss.mean()
-                acc = utils.calculate_accuracy(labels, pred)
+                acc = utils.calculate_accuracy(labels, pred_labels)
 
                 avg_loss += loss.item()
                 avg_acc += acc
 
                 all_labels = torch.cat((all_labels, labels))
-                all_preds = torch.cat((all_preds, pred))
+                all_preds = torch.cat((all_preds, pred_labels))
                 all_idxs = torch.cat((all_idxs, idxs))
 
                 count = i
@@ -293,15 +297,12 @@ class Trainer:
 
         return avg_loss / (count + 1), avg_acc / (count + 1)
 
+
     def _train_epoch(self):
         """Trains the model for one epoch."""
         face_loader, nonface_loader = self.train_loaders
 
         self.model.train()
-
-        # The batches contain Image(rgb x w x h), Labels (1 for 0), original dataset indices
-        face_batch: DatasetOutput
-        nonface_batch: DatasetOutput
 
         avg_loss: float = 0
         avg_acc: float = 0
@@ -312,7 +313,11 @@ class Trainer:
             images, labels = images.to(self.device), labels.to(self.device)
 
             # Forward pass
-            pred, loss = self.model.forward(images, labels)
+            pred_logits, loss = self.model.forward(images, labels)
+
+            # Convert logits to predicted labels
+            pred_probs = torch.sigmoid(pred_logits)
+            pred_labels = (pred_probs >= 0.5).long()
 
             # Calculate the gradient, and clip at 5
             self.optimizer.zero_grad()
@@ -322,7 +327,7 @@ class Trainer:
             self.optimizer.step()
 
             # Calculate metrics
-            acc = utils.calculate_accuracy(labels, pred)
+            acc = utils.calculate_accuracy(labels, pred_labels)
             avg_loss += loss.item()
             avg_acc += acc
 
@@ -332,6 +337,7 @@ class Trainer:
             count = i
 
         return avg_loss / (count + 1), avg_acc / (count + 1)
+
 
     def _update_sampling_histogram(self, epoch: int):
         """Updates the data loader for faces to be proportional to how challenging each image is, if
@@ -406,10 +412,10 @@ class Trainer:
     def get_training_sample_probabilities_chow_liu(
         self,
         loader,
-        bins: int = 10,
+        bins: int = 1000,
         smoothing_fac: float = 1e-6,
-        latent_dim: int = 100,
-        temperature: float = 1.0
+        latent_dim: int = 200,
+        temperature: float = 5.0
     ):
         """
         Calculates training sample probabilities based on the Chow-Liu algorithm.
