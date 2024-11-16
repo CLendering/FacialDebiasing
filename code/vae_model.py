@@ -262,6 +262,12 @@ class Db_vae(nn.Module):
         self.means = torch.cat((self.means, mean))
 
         return
+    
+    def encode(self, images: torch.Tensor):
+        """
+        Encodes the images and returns prediction, mean, and log_std.
+        """
+        return self.encoder(images)
 
 
     def build_histo(self, input: torch.Tensor):
