@@ -1,4 +1,3 @@
-
 from torchvision.transforms import ToPILImage
 from datasets.data_utils import DatasetOutput, default_transform
 from typing import Callable
@@ -8,8 +7,10 @@ import torch
 import torch.nn as nn
 from torch.utils.data import Dataset
 
+
 class GenericImageDataset(Dataset):
     """Generic dataset which defines all basic operations for the images."""
+
     def __init__(
         self,
         path_to_images: str,
@@ -57,16 +58,15 @@ class GenericImageDataset(Dataset):
                 min_win_size=self.sub_images_min_size,
                 max_win_size=self.sub_images_max_size,
                 nr_windows=self.sub_images_nr_windows,
-                stride=self.sub_images_stride
+                stride=self.sub_images_stride,
             )
 
         return DatasetOutput(
             image=tensor_img,
             label=torch.tensor(self.classification_label),
             idx=torch.tensor(idx).long(),
-            sub_images=sub_images
+            sub_images=sub_images,
         )
-
 
     def read_image(self, idx: int):
         """Interface, returns an PIL Image using the index."""

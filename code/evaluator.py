@@ -10,11 +10,13 @@ from vae_model import Db_vae
 from dataset import make_eval_loader
 from dataclasses import asdict
 
+
 class Evaluator:
     """
     Class that evaluates a model based on a given pre-initialized model or path_to_model
     and displays several performance metrics.
     """
+
     def __init__(
         self,
         path_to_eval_dataset,
@@ -27,7 +29,7 @@ class Evaluator:
         path_to_model: Optional[str] = None,
         model: Optional[Db_vae] = None,
         config: Optional[Config] = None,
-        **kwargs
+        **kwargs,
     ):
         self.z_dim = z_dim
         self.device = device
@@ -42,7 +44,9 @@ class Evaluator:
         self.model: Db_vae = self.init_model(path_to_model, model)
         self.path_to_eval_dataset = path_to_eval_dataset
 
-    def init_model(self, path_to_model: Optional[str] = None, model: Optional[Db_vae] = None):
+    def init_model(
+        self, path_to_model: Optional[str] = None, model: Optional[Db_vae] = None
+    ):
         """Initializes a stored model or one that directly comes from training."""
         if model is not None:
             logger.info("Using model passed")
@@ -55,12 +59,17 @@ class Evaluator:
         logger.error(
             "No model or path_to_model given",
             next_step="Evaluation will not run",
-            tip="Instantiate with a trained model, or set `path_to_model`."
+            tip="Instantiate with a trained model, or set `path_to_model`.",
         )
         raise Exception
 
-    def eval(self, filter_exclude_skin_color: List[str] = [], filter_exclude_gender: List[str] = [],
-                   dataset_type: str= "", max_images: int = -1):
+    def eval(
+        self,
+        filter_exclude_skin_color: List[str] = [],
+        filter_exclude_gender: List[str] = [],
+        dataset_type: str = "",
+        max_images: int = -1,
+    ):
         """Evaluates a model based and returns the amount of correctly classified and total classified images."""
         self.model.eval()
 
@@ -68,16 +77,16 @@ class Evaluator:
             eval_loader: DataLoader = make_eval_loader(
                 filter_exclude_skin_color=filter_exclude_skin_color,
                 filter_exclude_gender=filter_exclude_gender,
-                **asdict(self.config)
+                **asdict(self.config),
             )
         else:
-            params = {**asdict(self.config), 'max_images': max_images}
+            params = {**asdict(self.config), "max_images": max_images}
 
             eval_loader: DataLoader = make_eval_loader(
                 filter_exclude_skin_color=filter_exclude_skin_color,
                 filter_exclude_gender=filter_exclude_gender,
                 dataset_type=dataset_type,
-                **params
+                **params,
             )
 
         correct_count, count = self.eval_model(eval_loader)
@@ -104,7 +113,7 @@ class Evaluator:
             # Calculate on the current setup
             correct_count, count = self.eval(
                 filter_exclude_gender=gender_list[i],
-                filter_exclude_skin_color=skin_list[i]
+                filter_exclude_skin_color=skin_list[i],
             )
 
             # Calculate the metrics
@@ -117,17 +126,19 @@ class Evaluator:
             recalls.append(recall)
 
         # Calculate the average recall
-        avg_recall = correct_pos/total_count*100
+        avg_recall = correct_pos / total_count * 100
         variance = (torch.tensor(recalls)).var().item()
 
         # Calculate the amount of negative performance
         logger.info("Evaluating on negative samples")
-        incorrect_neg, neg_count = self.eval(dataset_type='h5_imagenet', max_images=1270)
+        incorrect_neg, neg_count = self.eval(
+            dataset_type="h5_imagenet", max_images=1270
+        )
         correct_neg: int = neg_count - incorrect_neg
 
         # Calculate the precision and accuracy
-        precision = correct_pos/(correct_pos + neg_count)*100
-        accuracy = (correct_pos + correct_neg)/(2*1270)*100
+        precision = correct_pos / (correct_pos + neg_count) * 100
+        accuracy = (correct_pos + correct_neg) / (2 * 1270) * 100
 
         # Logger info
         logger.info(f"Recall => all: {avg_recall:.3f}")
@@ -141,14 +152,21 @@ class Evaluator:
 
         # Write final results
         path_to_eval_results = f"results/{self.path_to_model}/{eval_name}"
-        with open(path_to_eval_results, 'a+') as write_file:
+        with open(path_to_eval_results, "a+") as write_file:
 
             # If file has no header
-            if not os.path.exists(path_to_eval_results) or os.path.getsize(path_to_eval_results) == 0:
-                write_file.write(f"name,dark male,dark female,light male,light female,var,precision,recall,accuracy\n")
+            if (
+                not os.path.exists(path_to_eval_results)
+                or os.path.getsize(path_to_eval_results) == 0
+            ):
+                write_file.write(
+                    f"name,dark male,dark female,light male,light female,var,precision,recall,accuracy\n"
+                )
 
             write_file.write(f"{self.path_to_model}_{self.model_name}")
-            write_file.write(f",{recalls[0]:.3f},{recalls[1]:.3f},{recalls[2]:.3f},{recalls[3]:.3f},{variance:.3f},{precision:.3f},{avg_recall:.3f},{accuracy:.3f}\n")
+            write_file.write(
+                f",{recalls[0]:.3f},{recalls[1]:.3f},{recalls[2]:.3f},{recalls[3]:.3f},{variance:.3f},{precision:.3f},{avg_recall:.3f},{accuracy:.3f}\n"
+            )
 
         logger.success("Finished evaluation!")
 
@@ -162,7 +180,7 @@ class Evaluator:
         # Iterate over all images and their sub_images
         for _, batch in enumerate(eval_loader):
             count += 1
-            _, _, _ , sub_images = batch
+            _, _, _, sub_images = batch
 
             for images in sub_images:
                 if len(images.shape) == 5:

@@ -7,6 +7,7 @@ from PIL import Image
 from typing import Callable
 from .data_utils import default_transform, DataLabel, DatasetOutput
 
+
 class H5CelebA(GenericImageDataset):
     def __init__(self, h5_dataset: h5py.Dataset, **kwargs):
         super().__init__(**kwargs)

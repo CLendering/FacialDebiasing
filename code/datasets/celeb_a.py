@@ -6,10 +6,10 @@ from PIL import Image
 from logger import logger
 
 # Default transform
-default_transform = transforms.Compose([
-    transforms.Resize((64, 64)),
-    transforms.ToTensor()
-])
+default_transform = transforms.Compose(
+    [transforms.Resize((64, 64)), transforms.ToTensor()]
+)
+
 
 class CelebDataset(GenericImageDataset):
     """Dataset for CelebA"""
@@ -21,9 +21,8 @@ class CelebDataset(GenericImageDataset):
         self.classification_label = 1
 
     def read_image(self, idx: int):
-        img: Image = Image.open(os.path.join(
-            self.path_to_images,
-            self.store.iloc[idx].image_id)
+        img: Image = Image.open(
+            os.path.join(self.path_to_images, self.store.iloc[idx].image_id)
         )
 
         return img

@@ -1,16 +1,22 @@
 import torch
 import torch.nn as nn
-from typing import Optional 
+from typing import Optional
 from datetime import datetime
 import os
 from logger import logger
 from torch.utils.data.dataset import Dataset
+from scipy.linalg import eigh
 
 from setup import init_trainining_results
 from vae_model import Db_vae
 from datasets.data_utils import DataLoaderTuple, DatasetOutput
 import utils
-from dataset import make_hist_loader, make_train_and_valid_loaders, concat_datasets, sample_dataset
+from dataset import (
+    make_hist_loader,
+    make_train_and_valid_loaders,
+    concat_datasets,
+    sample_dataset,
+)
 
 from torchvision.utils import make_grid
 from matplotlib import pyplot as plt
@@ -43,7 +49,7 @@ class Trainer:
         custom_decoding_layers: Optional[nn.Sequential] = None,
         path_to_model: Optional[str] = None,
         config: Optional[dict] = None,
-        **kwargs
+        **kwargs,
     ):
         """Wrapper class which trains a model."""
         init_trainining_results(config)
@@ -67,7 +73,7 @@ class Trainer:
             hist_size=hist_size,
             alpha=alpha,
             num_bins=num_bins,
-            device=self.device
+            device=self.device,
         ).to(device=self.device)
 
         self.model = self.init_model()
@@ -78,9 +84,7 @@ class Trainer:
         valid_loaders: DataLoaderTuple
 
         train_loaders, valid_loaders = make_train_and_valid_loaders(
-            batch_size=batch_size,
-            max_images=max_images,
-            **kwargs
+            batch_size=batch_size, max_images=max_images, **kwargs
         )
 
         self.train_loaders = train_loaders
@@ -99,7 +103,7 @@ class Trainer:
                 logger.error(
                     "Path has not been set.",
                     next_step="Model will not be initialized.",
-                    tip="Set a path_to_model in your config."
+                    tip="Set a path_to_model in your config.",
                 )
                 raise Exception
 
@@ -107,19 +111,22 @@ class Trainer:
                 logger.error(
                     f"Can't find model at results/{self.path_to_model}.",
                     next_step="Model will not be initialized.",
-                    tip=f"Check if the directory results/{self.path_to_model} exists."
+                    tip=f"Check if the directory results/{self.path_to_model} exists.",
                 )
                 raise Exception
 
             logger.info(f"Initializing model from {self.path_to_model}")
-            return Db_vae.init(self.path_to_model, self.device, self.z_dim).to(self.device)
+            return Db_vae.init(self.path_to_model, self.device, self.z_dim).to(
+                self.device
+            )
 
         # Model is newly initialized
-        logger.info(f"Creating new model with the following parameters:\n"
-                    f"z_dim: {self.z_dim}\n"
-                    f"hist_size: {self.hist_size}\n"
-                    f"alpha: {self.alpha}\n"
-                    f"num_bins: {self.num_bins}\n"
+        logger.info(
+            f"Creating new model with the following parameters:\n"
+            f"z_dim: {self.z_dim}\n"
+            f"hist_size: {self.hist_size}\n"
+            f"alpha: {self.alpha}\n"
+            f"num_bins: {self.num_bins}\n"
         )
 
         return Db_vae(
@@ -127,7 +134,7 @@ class Trainer:
             hist_size=self.hist_size,
             alpha=self.alpha,
             num_bins=self.num_bins,
-            device=self.device
+            device=self.device,
         ).to(device=self.device)
 
     def train(self, epochs: Optional[int] = None):
@@ -145,20 +152,24 @@ class Trainer:
             train_loss, train_acc = self._train_epoch()
             epoch_train_t = datetime.now() - epoch_start_t
             logger.info(f"epoch {epoch+1}/{epochs}::Training done")
-            logger.info(f"epoch {epoch+1}/{epochs} => train_loss={train_loss:.2f}, train_acc={train_acc:.2f}")
+            logger.info(
+                f"epoch {epoch+1}/{epochs} => train_loss={train_loss:.2f}, train_acc={train_acc:.2f}"
+            )
 
             # Validation
             logger.info("Starting validation")
             val_loss, val_acc = self._eval_epoch(epoch)
             epoch_val_t = datetime.now() - epoch_start_t
             logger.info(f"epoch {epoch+1}/{epochs}::Validation done")
-            logger.info(f"epoch {epoch+1}/{epochs} => val_loss={val_loss:.2f}, val_acc={val_acc:.2f}")
+            logger.info(
+                f"epoch {epoch+1}/{epochs} => val_loss={val_loss:.2f}, val_acc={val_acc:.2f}"
+            )
 
             # Print reconstruction
             valid_data = concat_datasets(
                 self.valid_loaders.faces.dataset,
                 self.valid_loaders.nonfaces.dataset,
-                proportion_a=0.5
+                proportion_a=0.5,
             )
             self.print_reconstruction(self.model, valid_data, epoch, self.device)
 
@@ -192,20 +203,27 @@ class Trainer:
 
         if save:
             fig.savefig(
-                f'results/{self.config.run_folder}/reconstructions/epoch={epoch}',
-                bbox_inches='tight'
+                f"results/{self.config.run_folder}/reconstructions/epoch={epoch}",
+                bbox_inches="tight",
             )
             plt.close()
         else:
             return fig
 
-    def _save_epoch(self, epoch: int, train_loss: float, val_loss: float, train_acc: float, val_acc: float):
+    def _save_epoch(
+        self,
+        epoch: int,
+        train_loss: float,
+        val_loss: float,
+        train_acc: float,
+        val_acc: float,
+    ):
         """Writes training and validation scores to a csv, and stores a model to disk."""
         if not self.run_folder:
             logger.warning(
                 "`--run_folder` could not be found.",
                 "The program will continue, but won't save anything",
-                "Double-check if --run_folder is configured."
+                "Double-check if --run_folder is configured.",
             )
             return
 
@@ -220,15 +238,21 @@ class Trainer:
 
         logger.save(f"Stored model and results at results/{self.run_folder}")
 
-    def visualize_bias(self, probs, data_loader, all_labels, all_index, epoch, n_rows=3):
+    def visualize_bias(
+        self, probs, data_loader, all_labels, all_index, epoch, n_rows=3
+    ):
         # TODO: Add annotation
-        n_samples = n_rows ** 2
+        n_samples = n_rows**2
 
         highest_probs = probs.argsort(descending=True)[:n_samples]
         lowest_probs = probs.argsort()[:n_samples]
 
-        highest_imgs = utils.sample_idxs_from_loader(all_index[highest_probs], data_loader, 1)
-        worst_imgs = utils.sample_idxs_from_loader(all_index[lowest_probs], data_loader, 1)
+        highest_imgs = utils.sample_idxs_from_loader(
+            all_index[highest_probs], data_loader, 1
+        )
+        worst_imgs = utils.sample_idxs_from_loader(
+            all_index[lowest_probs], data_loader, 1
+        )
 
         img_list = (highest_imgs, worst_imgs)
         titles = ("Highest weights", "Lowest weights")
@@ -245,7 +269,7 @@ class Trainer:
         path_to_results = f"results/{self.config.run_folder}/bias_probs/epoch={epoch}"
         logger.save(f"Saving a bias probability figure in {path_to_results}")
 
-        fig.savefig(path_to_results, bbox_inches='tight')
+        fig.savefig(path_to_results, bbox_inches="tight")
         plt.close()
 
     def _eval_epoch(self, epoch):
@@ -263,7 +287,9 @@ class Trainer:
         count = 0
 
         with torch.no_grad():
-            for i, (face_batch, nonface_batch) in enumerate(zip(face_loader, nonface_loader)):
+            for i, (face_batch, nonface_batch) in enumerate(
+                zip(face_loader, nonface_loader)
+            ):
                 images, labels, idxs = utils.concat_batches(face_batch, nonface_batch)
 
                 images = images.to(self.device)
@@ -287,16 +313,21 @@ class Trainer:
 
                 count = i
 
-        best_faces, worst_faces, best_other, worst_other = utils.get_best_and_worst_predictions(
-            all_labels, all_preds, self.device
+        best_faces, worst_faces, best_other, worst_other = (
+            utils.get_best_and_worst_predictions(all_labels, all_preds, self.device)
         )
         self.visualize_best_and_worst(
-            self.valid_loaders, all_labels, all_idxs, epoch,
-            best_faces, worst_faces, best_other, worst_other
+            self.valid_loaders,
+            all_labels,
+            all_idxs,
+            epoch,
+            best_faces,
+            worst_faces,
+            best_other,
+            worst_other,
         )
 
         return avg_loss / (count + 1), avg_acc / (count + 1)
-
 
     def _train_epoch(self):
         """Trains the model for one epoch."""
@@ -308,7 +339,9 @@ class Trainer:
         avg_acc: float = 0
         count: int = 0
 
-        for i, (face_batch, nonface_batch) in enumerate(zip(face_loader, nonface_loader)):
+        for i, (face_batch, nonface_batch) in enumerate(
+            zip(face_loader, nonface_loader)
+        ):
             images, labels, _ = utils.concat_batches(face_batch, nonface_batch)
             images, labels = images.to(self.device), labels.to(self.device)
 
@@ -338,14 +371,15 @@ class Trainer:
 
         return avg_loss / (count + 1), avg_acc / (count + 1)
 
-
     def _update_sampling_histogram(self, epoch: int):
         """Updates the data loader for faces to be proportional to how challenging each image is, if
         debias_type is not 'none'.
         """
-        hist_loader = make_hist_loader(self.train_loaders.faces.dataset, self.batch_size)
+        hist_loader = make_hist_loader(
+            self.train_loaders.faces.dataset, self.batch_size
+        )
 
-        if self.debias_type != 'none':
+        if self.debias_type != "none":
             self._update_histogram(hist_loader, epoch)
         else:
             self.train_loaders.faces.sampler.weights = torch.ones(
@@ -357,7 +391,13 @@ class Trainer:
         logger.info(f"Updating weight histogram using method: {self.debias_type}")
 
         if self.debias_type == "chow-liu":
-            probs, all_labels, all_index = self.get_training_sample_probabilities_chow_liu(data_loader)
+            probs, all_labels, all_index = (
+                self.get_training_sample_probabilities_chow_liu(data_loader)
+            )
+        elif self.debias_type == "full_gaussian":
+            probs, all_labels, all_index = (
+                self.get_training_sample_probabilities_full_gaussian(data_loader)
+            )
         elif self.debias_type in ["max", "max5", "gaussian"]:
             self.model.means = torch.Tensor().to(self.device)
             self.model.std = torch.Tensor().to(self.device)
@@ -368,7 +408,11 @@ class Trainer:
             with torch.no_grad():
                 for batch in data_loader:
                     images, labels, index, _ = batch
-                    images, labels, index = images.to(self.device), labels.to(self.device), index.to(self.device)
+                    images, labels, index = (
+                        images.to(self.device),
+                        labels.to(self.device),
+                        index.to(self.device),
+                    )
 
                     all_labels = torch.cat((all_labels, labels))
                     all_index = torch.cat((all_index, index))
@@ -384,38 +428,33 @@ class Trainer:
                 probs = self.model.get_histo_max5()
             elif self.debias_type == "gaussian":
                 probs = self.model.get_histo_gaussian()
-            else:
-                logger.error(
-                    "No correct debias method given!",
-                    next_step="The program will now close",
-                    tip="Set --debias_method to 'max', 'max5' or 'gaussian'."
-                )
-                raise Exception()
         else:
             logger.error(
                 "Unsupported debias_type!",
                 next_step="The program will now close",
-                tip="Set --debias_type to 'max', 'max5', 'gaussian', or 'chow-liu'."
+                tip="Set --debias_type to 'max', 'max5', 'gaussian', 'full_gaussian' or 'chow-liu'.",
             )
             raise Exception()
 
-        if self.debias_type != 'none':
+        # Apply the calculated probabilities to the sampler weights
+        if self.debias_type != "none":
             self.train_loaders.faces.sampler.weights = probs
         else:
             self.train_loaders.faces.sampler.weights = torch.ones(
                 len(self.train_loaders.faces.sampler.weights)
             )
 
-        if self.debias_type == "chow-liu":
+        # Call visualize_bias for the relevant debiasing methods
+        if self.debias_type in ["chow-liu", "full_gaussian"]:
             self.visualize_bias(probs, data_loader, all_labels, all_index, epoch)
 
     def get_training_sample_probabilities_chow_liu(
         self,
         loader,
-        bins: int = 1000,
-        smoothing_fac: float = 1e-6,
+        bins: int = 10,
+        smoothing_fac: float = 1e-4,
         latent_dim: int = 200,
-        temperature: float = 5.0
+        temperature: float = 4.0,
     ):
         """
         Calculates training sample probabilities based on the Chow-Liu algorithm.
@@ -433,8 +472,12 @@ class Trainer:
         with torch.no_grad():
             for batch in tqdm.tqdm(loader, desc="Calculating latent mu"):
                 images, labels, index, _ = batch
-                images = images.to(self.device, non_blocking=True)  # Move images to the appropriate device
-                _, mu_batch, _ = self.model.encode(images)  # Get the latent mean for the batch
+                images = images.to(
+                    self.device, non_blocking=True
+                )  # Move images to the appropriate device
+                _, mu_batch, _ = self.model.encode(
+                    images
+                )  # Get the latent mean for the batch
                 mu_list.append(mu_batch.cpu().numpy())  # Move to CPU and store
                 all_labels = torch.cat((all_labels, labels))
                 all_index = torch.cat((all_index, index))
@@ -455,7 +498,9 @@ class Trainer:
             edges = np.linspace(min_val, max_val, bins + 1)
             bin_edges.append(edges)
             # Digitize and clamp the indices to stay within the valid range
-            discretized_mu[:, i] = np.clip(np.digitize(mu[:, i], edges) - 1, 0, bins - 1)
+            discretized_mu[:, i] = np.clip(
+                np.digitize(mu[:, i], edges) - 1, 0, bins - 1
+            )
 
         # Step 2: Calculate pairwise mutual information to build the Chow-Liu Tree
         mutual_info_matrix = np.zeros((latent_dim, latent_dim))
@@ -491,12 +536,20 @@ class Trainer:
         # Create pairwise histograms for directed edges
         for edge in directed_edges:
             i, j = edge
-            hist_2d, _, _ = np.histogram2d(discretized_mu[:, i], discretized_mu[:, j], bins=bins)
-            pairwise_histograms[(i, j)] = hist_2d / hist_2d.sum()  # Normalize to probabilities
+            hist_2d, _, _ = np.histogram2d(
+                discretized_mu[:, i], discretized_mu[:, j], bins=bins
+            )
+            pairwise_histograms[(i, j)] = (
+                hist_2d / hist_2d.sum()
+            )  # Normalize to probabilities
 
         # Create marginal histogram for the root node
-        marginal_histogram_root, _ = np.histogram(discretized_mu[:, root_node], bins=bins)
-        marginal_histogram_root = marginal_histogram_root / marginal_histogram_root.sum()  # Normalize
+        marginal_histogram_root, _ = np.histogram(
+            discretized_mu[:, root_node], bins=bins
+        )
+        marginal_histogram_root = (
+            marginal_histogram_root / marginal_histogram_root.sum()
+        )  # Normalize
 
         # Step 4: Calculate log probabilities for each sample using the directed tree
         log_training_sample_p = np.zeros(mu.shape[0])
@@ -515,17 +568,114 @@ class Trainer:
                 # Ensure indices are clamped within the valid range
                 parent_bin = np.clip(parent_bin, 0, bins - 1)
                 child_bin = np.clip(child_bin, 0, bins - 1)
-                conditional_prob = pairwise_histograms[(parent, child)][parent_bin, child_bin]
+                conditional_prob = pairwise_histograms[(parent, child)][
+                    parent_bin, child_bin
+                ]
                 log_p_sample += np.log(conditional_prob + smoothing_fac)
 
             # Adjust with temperature and accumulate
             log_training_sample_p[sample_idx] = -log_p_sample / temperature
 
         # Step 5: Convert log probabilities to normalized probabilities
-        training_sample_p = np.exp(log_training_sample_p - np.max(log_training_sample_p))
+        training_sample_p = np.exp(
+            log_training_sample_p - np.max(log_training_sample_p)
+        )
         training_sample_p /= training_sample_p.sum()
 
-        return torch.tensor(training_sample_p, dtype=torch.float32).to(self.device), all_labels, all_index
+        return (
+            torch.tensor(training_sample_p, dtype=torch.float32).to(self.device),
+            all_labels,
+            all_index,
+        )
+
+    def get_training_sample_probabilities_full_gaussian(
+        self,
+        loader,
+        bins: int = 10,  # Retained for compatibility, unused here
+        smoothing_fac: float = 1e-3,
+        temperature: float = 1.0,
+        k: int = None,  # Optional low-rank approximation parameter
+    ):
+        from scipy.stats import multivariate_normal
+
+        latent_dim = self.z_dim  # Use the latent dimension from the model
+
+        self.model.eval()
+        mu_list = []
+        std_list = []
+        all_labels = torch.tensor([], dtype=torch.long).to(self.device)
+        all_index = torch.tensor([], dtype=torch.long).to(self.device)
+
+        with torch.no_grad():
+            for batch in tqdm.tqdm(loader, desc="Calculating latent mu and sigma"):
+                images, labels, index, _ = batch
+                images = images.to(self.device, non_blocking=True)
+                _, mu_batch, std_batch = self.model.encode(images)
+                mu_list.append(mu_batch.cpu().numpy())
+                std_list.append(std_batch.cpu().numpy())
+                all_labels = torch.cat((all_labels, labels.to(self.device)))
+                all_index = torch.cat((all_index, index.to(self.device)))
+
+        mu = np.concatenate(mu_list, axis=0)
+        std = np.concatenate(std_list, axis=0)
+
+        N = mu.shape[0]
+        global_mu = np.mean(mu, axis=0)
+        mu_centered = mu - global_mu
+
+        # Compute covariance matrix using the sample covariance formula
+        covariance = (mu_centered.T @ mu_centered) / N
+
+        # Incorporate the mean of the variances into the covariance matrix
+        avg_std2 = np.mean(std**2, axis=0)
+        covariance += np.diag(avg_std2)
+
+        # Stabilize covariance matrix with regularization
+        covariance += np.eye(latent_dim) * 1e-6  # Small regularization term
+
+        # Optional low-rank approximation
+        if k is not None and k < latent_dim:
+            eigenvalues, eigenvectors = eigh(covariance)
+            top_indices = np.argsort(eigenvalues)[::-1][:k]
+            U_k = eigenvectors[:, top_indices]
+            Lambda_k = np.diag(eigenvalues[top_indices])
+            covariance = U_k @ Lambda_k @ U_k.T
+
+        # Use scipy.stats.multivariate_normal to compute log probabilities
+        try:
+            rv = multivariate_normal(
+                mean=global_mu, cov=covariance, allow_singular=True
+            )
+            log_probs = rv.logpdf(mu)
+        except np.linalg.LinAlgError as e:
+            print(f"Covariance matrix is not positive definite: {e}")
+            # Regularize covariance matrix further
+            covariance += np.eye(latent_dim) * 1e-2
+            rv = multivariate_normal(
+                mean=global_mu, cov=covariance, allow_singular=True
+            )
+            log_probs = rv.logpdf(mu)
+
+        # Normalize log-probabilities
+        max_log_prob = np.max(log_probs)
+        normalized_log_probs = log_probs - max_log_prob
+
+        # Invert log-probabilities to prioritize lower-density regions
+        inverted_log_probs = -normalized_log_probs
+        max_inverted_log_prob = np.max(inverted_log_probs)
+        shifted_inverted_log_probs = inverted_log_probs - max_inverted_log_prob
+
+        # Convert inverted log-probabilities to probabilities
+        probs = np.exp(shifted_inverted_log_probs)
+        probs += smoothing_fac  # Add smoothing to avoid zeros
+        probs = probs ** (1 / temperature)  # Apply temperature scaling
+        probs /= np.sum(probs)  # Normalize to sum to 1
+
+        return (
+            torch.tensor(probs, dtype=torch.float32).to(self.device),
+            all_labels,
+            all_index,
+        )
 
     def sample(self, n_rows=4):
         n_samples = n_rows**2
@@ -544,17 +694,28 @@ class Trainer:
         valid_data = concat_datasets(
             self.valid_loaders.faces.dataset,
             self.valid_loaders.nonfaces.dataset,
-            proportion_a=0.5
+            proportion_a=0.5,
         )
-        fig = self.print_reconstruction(self.model, valid_data, 0, self.device, save=False)
+        fig = self.print_reconstruction(
+            self.model, valid_data, 0, self.device, save=False
+        )
 
         fig.show()
 
         return
 
     def visualize_best_and_worst(
-        self, data_loaders, all_labels, all_indices, epoch,
-        best_faces, worst_faces, best_other, worst_other, n_rows=4, save=True
+        self,
+        data_loaders,
+        all_labels,
+        all_indices,
+        epoch,
+        best_faces,
+        worst_faces,
+        best_other,
+        worst_other,
+        n_rows=4,
+        save=True,
     ):
         # TODO: Add annotation
         n_samples = n_rows**2
@@ -565,7 +726,9 @@ class Trainer:
         for i, indices in enumerate((best_faces, worst_faces, best_other, worst_other)):
             labels_subset = all_labels[indices]
             indices_subset = all_indices[indices]
-            images = utils.sample_idxs_from_loaders(indices_subset, data_loaders, labels_subset[0])
+            images = utils.sample_idxs_from_loaders(
+                indices_subset, data_loaders, labels_subset[0]
+            )
 
             ax = fig.add_subplot(2, 2, i + 1)
             grid = make_grid(images.reshape(n_samples, 3, 64, 64), n_rows)
@@ -576,8 +739,8 @@ class Trainer:
 
         if save:
             fig.savefig(
-                f'results/{self.config.run_folder}/best_and_worst/epoch:{epoch}',
-                bbox_inches='tight'
+                f"results/{self.config.run_folder}/best_and_worst/epoch:{epoch}",
+                bbox_inches="tight",
             )
             plt.close()
         else:
@@ -598,7 +761,9 @@ class Trainer:
         count = 0
 
         with torch.no_grad():
-            for i, (face_batch, nonface_batch) in enumerate(zip(face_loader, nonface_loader)):
+            for i, (face_batch, nonface_batch) in enumerate(
+                zip(face_loader, nonface_loader)
+            ):
                 images, labels, idxs = utils.concat_batches(face_batch, nonface_batch)
 
                 images = images.to(self.device)
@@ -618,13 +783,19 @@ class Trainer:
 
                 count = i
 
-        best_faces, worst_faces, best_other, worst_other = utils.get_best_and_worst_predictions(
-            all_labels, all_preds, self.device
+        best_faces, worst_faces, best_other, worst_other = (
+            utils.get_best_and_worst_predictions(all_labels, all_preds, self.device)
         )
         fig = self.visualize_best_and_worst(
-            self.valid_loaders, all_labels, all_idxs, 0,
-            best_faces, worst_faces, best_other, worst_other,
-            save=False
+            self.valid_loaders,
+            all_labels,
+            all_idxs,
+            0,
+            best_faces,
+            worst_faces,
+            best_other,
+            worst_other,
+            save=False,
         )
 
         fig.show()
