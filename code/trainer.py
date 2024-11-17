@@ -49,6 +49,10 @@ class Trainer:
         custom_decoding_layers: Optional[nn.Sequential] = None,
         path_to_model: Optional[str] = None,
         config: Optional[dict] = None,
+        bins: float = 100,
+        smoothing_fac: float = 1e-4,
+        temperature: float = 5.0,
+        k: int = 50,
         **kwargs,
     ):
         """Wrapper class which trains a model."""
@@ -65,6 +69,11 @@ class Trainer:
         self.device = device
         self.eval_freq = eval_freq
         self.run_folder = run_folder
+
+        self.k = k
+        self.bins = bins
+        self.smoothing_fac = smoothing_fac
+        self.temperature = temperature
 
         self.config = config
 
@@ -89,12 +98,6 @@ class Trainer:
 
         self.train_loaders = train_loaders
         self.valid_loaders = valid_loaders
-
-        # Parameters for Chow-Liu
-        self.cl_bins = 10  # Number of bins for discretization
-        self.cl_smoothing_fac = 1e-6
-        self.cl_latent_dim = z_dim  # Assuming z_dim is the latent dimension
-        self.cl_temperature = 1.0
 
     def init_model(self):
         # If model is loaded from file-system
@@ -451,10 +454,6 @@ class Trainer:
     def get_training_sample_probabilities_chow_liu(
         self,
         loader,
-        bins: int = 10,
-        smoothing_fac: float = 1e-4,
-        latent_dim: int = 200,
-        temperature: float = 4.0,
     ):
         """
         Calculates training sample probabilities based on the Chow-Liu algorithm.
@@ -467,6 +466,11 @@ class Trainer:
         mu_list = []
         all_labels = torch.tensor([], dtype=torch.long).to(self.device)
         all_index = torch.tensor([], dtype=torch.long).to(self.device)
+
+        latent_dim = self.z_dim
+        bins = self.bins
+        smoothing_fac = self.smoothing_fac
+        temperature = self.temperature
 
         count = 0
         with torch.no_grad():
@@ -591,14 +595,14 @@ class Trainer:
     def get_training_sample_probabilities_full_gaussian(
         self,
         loader,
-        bins: int = 10,  # Retained for compatibility, unused here
-        smoothing_fac: float = 1e-3,
-        temperature: float = 1.0,
-        k: int = None,  # Optional low-rank approximation parameter
     ):
         from scipy.stats import multivariate_normal
 
         latent_dim = self.z_dim  # Use the latent dimension from the model
+
+        smoothing_fac = self.smoothing_fac
+        temperature = self.temperature
+        k = self.k
 
         self.model.eval()
         mu_list = []
