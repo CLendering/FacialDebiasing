@@ -6,6 +6,7 @@ import os
 from logger import logger
 from torch.utils.data.dataset import Dataset
 from scipy.linalg import eigh
+from scipy.special import softmax
 
 from setup import init_trainining_results
 from vae_model import Db_vae
@@ -685,17 +686,22 @@ class Trainer:
         energies = -log_probs
 
         # Subtract max energy to prevent numerical overflow
-        max_energy = np.max(energies)
-        energies -= max_energy
+        # max_energy = np.max(energies)
+        # energies -= max_energy
 
-        # Compute probabilities by exponentiating energies over temperature
-        probs = np.exp(energies / temperature)
+        mean_energy = np.mean(energies)
+        energies -= mean_energy
 
-        # Add smoothing to avoid zeros
-        probs += smoothing_fac
+        probs = softmax(energies / temperature)
 
-        # Normalize to sum to 1
-        probs /= np.sum(probs)
+        # # Compute probabilities by exponentiating energies over temperature
+        # probs = np.exp(energies / temperature)
+
+        # # Add smoothing to avoid zeros
+        # probs += smoothing_fac
+
+        # # Normalize to sum to 1
+        # probs /= np.sum(probs)
 
         # Debugging: Log probability statistics
         logger.info(
