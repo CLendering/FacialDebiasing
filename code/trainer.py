@@ -51,8 +51,8 @@ class Trainer:
         config: Optional[dict] = None,
         bins: float = 100,
         smoothing_fac: float = 1e-4,
-        temperature: float = 5.0,
-        k: int = 50,
+        temperature: float = 4.0,
+        k: int = 20,
         **kwargs,
     ):
         """Wrapper class which trains a model."""
@@ -593,8 +593,8 @@ class Trainer:
         )
 
     def get_training_sample_probabilities_full_gaussian(
-        self,
-        loader,
+    self,
+    loader,
     ):
         from scipy.stats import multivariate_normal
 
@@ -607,8 +607,8 @@ class Trainer:
         self.model.eval()
         mu_list = []
         std_list = []
-        all_labels = torch.tensor([], dtype=torch.long).to(self.device)
-        all_index = torch.tensor([], dtype=torch.long).to(self.device)
+        all_labels = torch.tensor([], dtype=torch.long)
+        all_index = torch.tensor([], dtype=torch.long)
 
         with torch.no_grad():
             for batch in tqdm.tqdm(loader, desc="Calculating latent mu and sigma"):
@@ -617,8 +617,8 @@ class Trainer:
                 _, mu_batch, std_batch = self.model.encode(images)
                 mu_list.append(mu_batch.cpu().numpy())
                 std_list.append(std_batch.cpu().numpy())
-                all_labels = torch.cat((all_labels, labels.to(self.device)))
-                all_index = torch.cat((all_index, index.to(self.device)))
+                all_labels = torch.cat((all_labels, labels.cpu()))
+                all_index = torch.cat((all_index, index.cpu()))
 
         mu = np.concatenate(mu_list, axis=0)
         std = np.concatenate(std_list, axis=0)
@@ -631,19 +631,35 @@ class Trainer:
         covariance = (mu_centered.T @ mu_centered) / N
 
         # Incorporate the mean of the variances into the covariance matrix
-        avg_std2 = np.mean(std**2, axis=0)
+        avg_std2 = np.mean(std ** 2, axis=0)
         covariance += np.diag(avg_std2)
 
+        # Enforce symmetry
+        covariance = (covariance + covariance.T) / 2
+
         # Stabilize covariance matrix with regularization
-        covariance += np.eye(latent_dim) * 1e-6  # Small regularization term
+        reg_term = 1e-6  # You may adjust this value as needed
+        covariance += np.eye(latent_dim) * reg_term
+
+        # Ensure covariance matrix is positive semidefinite
+        eigenvalues, eigenvectors = np.linalg.eigh(covariance)
+
+        # Set negative eigenvalues to zero
+        eigenvalues[eigenvalues < 0] = 0
+
+        # Reconstruct the covariance matrix
+        covariance = eigenvectors @ np.diag(eigenvalues) @ eigenvectors.T
 
         # Optional low-rank approximation
         if k is not None and k < latent_dim:
-            eigenvalues, eigenvectors = eigh(covariance)
-            top_indices = np.argsort(eigenvalues)[::-1][:k]
-            U_k = eigenvectors[:, top_indices]
-            Lambda_k = np.diag(eigenvalues[top_indices])
-            covariance = U_k @ Lambda_k @ U_k.T
+            # Keep only the top k eigenvalues
+            idx = np.argsort(eigenvalues)[::-1][:k]
+            eigenvalues = eigenvalues[idx]
+            eigenvectors = eigenvectors[:, idx]
+            covariance = eigenvectors @ np.diag(eigenvalues) @ eigenvectors.T
+
+        # Ensure covariance is symmetric
+        covariance = (covariance + covariance.T) / 2
 
         # Use scipy.stats.multivariate_normal to compute log probabilities
         try:
@@ -651,35 +667,49 @@ class Trainer:
                 mean=global_mu, cov=covariance, allow_singular=True
             )
             log_probs = rv.logpdf(mu)
-        except np.linalg.LinAlgError as e:
-            print(f"Covariance matrix is not positive definite: {e}")
-            # Regularize covariance matrix further
-            covariance += np.eye(latent_dim) * 1e-2
+        except ValueError as e:
+            print(f"An error occurred: {e}")
+            # Increase regularization if necessary
+            reg_term = 1e-4
+            covariance += np.eye(latent_dim) * reg_term
+            eigenvalues, eigenvectors = np.linalg.eigh(covariance)
+            eigenvalues[eigenvalues < 0] = 0
+            covariance = eigenvectors @ np.diag(eigenvalues) @ eigenvectors.T
+            covariance = (covariance + covariance.T) / 2
             rv = multivariate_normal(
                 mean=global_mu, cov=covariance, allow_singular=True
             )
             log_probs = rv.logpdf(mu)
 
-        # Normalize log-probabilities
-        max_log_prob = np.max(log_probs)
-        normalized_log_probs = log_probs - max_log_prob
+        # Compute energies (negative log probabilities)
+        energies = -log_probs
 
-        # Invert log-probabilities to prioritize lower-density regions
-        inverted_log_probs = -normalized_log_probs
-        max_inverted_log_prob = np.max(inverted_log_probs)
-        shifted_inverted_log_probs = inverted_log_probs - max_inverted_log_prob
+        # Subtract max energy to prevent numerical overflow
+        max_energy = np.max(energies)
+        energies -= max_energy
 
-        # Convert inverted log-probabilities to probabilities
-        probs = np.exp(shifted_inverted_log_probs)
-        probs += smoothing_fac  # Add smoothing to avoid zeros
-        probs = probs ** (1 / temperature)  # Apply temperature scaling
-        probs /= np.sum(probs)  # Normalize to sum to 1
+        # Compute probabilities by exponentiating energies over temperature
+        probs = np.exp(energies / temperature)
+
+        # Add smoothing to avoid zeros
+        probs += smoothing_fac
+
+        # Normalize to sum to 1
+        probs /= np.sum(probs)
+
+        # Debugging: Log probability statistics
+        logger.info(
+            f"Probabilities stats: min={probs.min():.6e}, max={probs.max():.6e}, "
+            f"mean={probs.mean():.6e}, std={probs.std():.6e}"
+        )
 
         return (
             torch.tensor(probs, dtype=torch.float32).to(self.device),
-            all_labels,
-            all_index,
+            all_labels.to(self.device),
+            all_index.to(self.device),
         )
+
+
 
     def sample(self, n_rows=4):
         n_samples = n_rows**2
