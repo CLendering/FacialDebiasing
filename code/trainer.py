@@ -457,134 +457,149 @@ class Trainer:
         loader,
     ):
         """
-        Calculates training sample probabilities based on the Chow-Liu algorithm.
-        Returns:
-            training_sample_p (torch.Tensor): Normalized probabilities for sampling.
-            all_labels (torch.Tensor): All labels collected during processing.
-            all_index (torch.Tensor): All indices collected during processing.
+        Calculates training sample probabilities using an improved Chow-Liu algorithm with:
+        - Optimal root selection based on weighted degree
+        - Mode collapse prevention through entropy maximization
+        - Improved numerical stability
         """
-        self.model.eval()  # Set the model to evaluation mode
+        self.model.eval()
         mu_list = []
         all_labels = torch.tensor([], dtype=torch.long).to(self.device)
         all_index = torch.tensor([], dtype=torch.long).to(self.device)
 
+        # Extract parameters
         latent_dim = self.z_dim
         bins = self.bins
         smoothing_fac = self.smoothing_fac
         temperature = self.temperature
-
-        count = 0
+        min_prob = 1e-5
+        # Collect latent representations
         with torch.no_grad():
-            for batch in tqdm.tqdm(loader, desc="Calculating latent mu"):
+            for batch in tqdm.tqdm(loader, desc="Computing latent embeddings"):
                 images, labels, index, _ = batch
-                images = images.to(
-                    self.device, non_blocking=True
-                )  # Move images to the appropriate device
-                _, mu_batch, _ = self.model.encode(
-                    images
-                )  # Get the latent mean for the batch
-                mu_list.append(mu_batch.cpu().numpy())  # Move to CPU and store
+                images = images.to(self.device, non_blocking=True)
+                _, mu_batch, _ = self.model.encode(images)
+                mu_list.append(mu_batch.cpu().numpy())
                 all_labels = torch.cat((all_labels, labels))
                 all_index = torch.cat((all_index, index))
-                count += self.batch_size
-                # Optionally, add a debug mode to break early
-                # if count > 2500:
-                #     print(f"Breaking early...")
-                #     break
 
-        # Concatenate mu from all batches
         mu = np.concatenate(mu_list, axis=0)
 
-        # Step 1: Discretize each latent dimension into bins
+        # Robust discretization with adaptive binning
         discretized_mu = np.zeros_like(mu, dtype=int)
         bin_edges = []
         for i in range(latent_dim):
-            min_val, max_val = mu[:, i].min(), mu[:, i].max()
-            edges = np.linspace(min_val, max_val, bins + 1)
+            # Use robust statistics for binning
+            q1, q3 = np.percentile(mu[:, i], [25, 75])
+            iqr = q3 - q1
+            min_val = max(mu[:, i].min(), q1 - 1.5 * iqr)
+            max_val = min(mu[:, i].max(), q3 + 1.5 * iqr)
+
+            # Create edges with padding to prevent edge effects
+            padding = 0.1 * (max_val - min_val)
+            edges = np.linspace(min_val - padding, max_val + padding, bins + 1)
             bin_edges.append(edges)
-            # Digitize and clamp the indices to stay within the valid range
             discretized_mu[:, i] = np.clip(
                 np.digitize(mu[:, i], edges) - 1, 0, bins - 1
             )
 
-        # Step 2: Calculate pairwise mutual information to build the Chow-Liu Tree
+        # Calculate mutual information matrix with entropy regularization
         mutual_info_matrix = np.zeros((latent_dim, latent_dim))
+        entropy_scores = np.zeros(latent_dim)
+
         for i in range(latent_dim):
+            # Calculate entropy for each dimension
+            hist_i, _ = np.histogram(discretized_mu[:, i], bins=bins, density=True)
+            hist_i = hist_i + smoothing_fac
+            hist_i = hist_i / hist_i.sum()
+            entropy_scores[i] = -np.sum(hist_i * np.log(hist_i + min_prob))
+
             for j in range(i + 1, latent_dim):
                 mi = mutual_info_score(discretized_mu[:, i], discretized_mu[:, j])
-                mutual_info_matrix[i, j] = mi
-                mutual_info_matrix[j, i] = mi
+                # Regularize MI with entropy
+                mi_regularized = mi + 0.1 * (entropy_scores[i] + entropy_scores[j])
+                mutual_info_matrix[i, j] = mi_regularized
+                mutual_info_matrix[j, i] = mi_regularized
 
-        # Build maximum spanning tree based on mutual information
+                # Build maximum spanning tree
         G = nx.Graph()
         for i in range(latent_dim):
             for j in range(i + 1, latent_dim):
                 G.add_edge(i, j, weight=mutual_info_matrix[i, j])
         mst = nx.maximum_spanning_tree(G)
 
-        # Step 3: Orient the MST and create pairwise histograms
-        pairwise_histograms = {}
-        root_node = list(mst.nodes())[0]  # Choose a root node
+        # Alternative root selection using degree and weight combination
+        weighted_degrees = {}
+        for node in mst.nodes():
+            # Calculate weighted degree
+            w_degree = sum(
+                mst[node][neighbor]["weight"] for neighbor in mst.neighbors(node)
+            )
+            # Combine with number of connections
+            weighted_degrees[node] = w_degree * len(list(mst.neighbors(node)))
+
+        # Select root with highest weighted degree
+        root_node = max(weighted_degrees.keys(), key=lambda k: weighted_degrees[k])
 
         # Orient the tree using BFS
-        queue = [root_node]
-        visited = set()
-        directed_edges = []  # To store directed edges
+        directed_edges = []
+        visited = set([root_node])
+        queue = [(root_node, None)]
+
         while queue:
-            node = queue.pop(0)
-            visited.add(node)
+            node, parent = queue.pop(0)
             for neighbor in mst.neighbors(node):
                 if neighbor not in visited:
                     directed_edges.append((node, neighbor))
-                    queue.append(neighbor)
+                    visited.add(neighbor)
+                    queue.append((neighbor, node))
 
-        # Create pairwise histograms for directed edges
+        # Create smoothed pairwise histograms
+        pairwise_histograms = {}
         for edge in directed_edges:
             i, j = edge
             hist_2d, _, _ = np.histogram2d(
-                discretized_mu[:, i], discretized_mu[:, j], bins=bins
+                discretized_mu[:, i], discretized_mu[:, j], bins=bins, density=True
             )
-            pairwise_histograms[(i, j)] = (
-                hist_2d / hist_2d.sum()
-            )  # Normalize to probabilities
+            # Apply Laplace smoothing
+            hist_2d = hist_2d + smoothing_fac
+            hist_2d = hist_2d / hist_2d.sum()
+            pairwise_histograms[edge] = hist_2d
 
-        # Create marginal histogram for the root node
+        # Create smoothed root marginal
         marginal_histogram_root, _ = np.histogram(
-            discretized_mu[:, root_node], bins=bins
+            discretized_mu[:, root_node], bins=bins, density=True
         )
+        marginal_histogram_root = marginal_histogram_root + smoothing_fac
         marginal_histogram_root = (
             marginal_histogram_root / marginal_histogram_root.sum()
-        )  # Normalize
+        )
 
-        # Step 4: Calculate log probabilities for each sample using the directed tree
+        # Calculate log probabilities with improved numerical stability
         log_training_sample_p = np.zeros(mu.shape[0])
 
         for sample_idx in range(mu.shape[0]):
             current_sample = discretized_mu[sample_idx]
 
-            # Start with the root node's marginal probability
-            root_bin = current_sample[root_node]
-            log_p_sample = np.log(marginal_histogram_root[root_bin] + smoothing_fac)
+            # Start with root probability
+            root_bin = np.clip(current_sample[root_node], 0, bins - 1)
+            log_p_sample = np.log(marginal_histogram_root[root_bin] + min_prob)
 
-            # Traverse directed edges
+            # Traverse tree
             for parent, child in directed_edges:
-                parent_bin = current_sample[parent]
-                child_bin = current_sample[child]
-                # Ensure indices are clamped within the valid range
-                parent_bin = np.clip(parent_bin, 0, bins - 1)
-                child_bin = np.clip(child_bin, 0, bins - 1)
+                parent_bin = np.clip(current_sample[parent], 0, bins - 1)
+                child_bin = np.clip(current_sample[child], 0, bins - 1)
                 conditional_prob = pairwise_histograms[(parent, child)][
                     parent_bin, child_bin
                 ]
-                log_p_sample += np.log(conditional_prob + smoothing_fac)
+                log_p_sample += np.log(conditional_prob + min_prob)
 
-            # Adjust with temperature and accumulate
-            log_training_sample_p[sample_idx] = -log_p_sample / temperature
+            log_training_sample_p[sample_idx] = -log_p_sample / temperature  # Invert!
 
-        # Step 5: Convert log probabilities to normalized probabilities
-        training_sample_p = np.exp(
-            log_training_sample_p - np.max(log_training_sample_p)
-        )
+        # Convert to probabilities with improved numerical stability
+        log_training_sample_p -= np.max(log_training_sample_p)
+        training_sample_p = np.exp(log_training_sample_p)
+        training_sample_p = np.maximum(training_sample_p, min_prob)
         training_sample_p /= training_sample_p.sum()
 
         return (
@@ -594,9 +609,12 @@ class Trainer:
         )
 
     def get_training_sample_probabilities_full_gaussian(
-    self,
-    loader,
+        self,
+        loader,
     ):
+        """
+        NOTE: Method does nor work. Cannot model a multimodal distribution with a single Gaussian.
+        """
         from scipy.stats import multivariate_normal
 
         latent_dim = self.z_dim  # Use the latent dimension from the model
@@ -632,7 +650,7 @@ class Trainer:
         covariance = (mu_centered.T @ mu_centered) / N
 
         # Incorporate the mean of the variances into the covariance matrix
-        avg_std2 = np.mean(std ** 2, axis=0)
+        avg_std2 = np.mean(std**2, axis=0)
         covariance += np.diag(avg_std2)
 
         # Enforce symmetry
@@ -714,8 +732,6 @@ class Trainer:
             all_labels.to(self.device),
             all_index.to(self.device),
         )
-
-
 
     def sample(self, n_rows=4):
         n_samples = n_rows**2
